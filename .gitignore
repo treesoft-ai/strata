@@ -1,0 +1,20 @@
+# python byte cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# model weights
+models/
+
+# strata state
+.strata_state.json
+
+# ide metadata
+.vscode/
+.idea/
