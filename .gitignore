@@ -10,7 +10,7 @@ ENV/
 env/
 
 # model weights
-models/
+/models/
 
 # strata state
 .strata_state.json
