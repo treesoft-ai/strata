@@ -96,6 +96,40 @@ class ModelManager:
             self.active_harness = None
         self.active_name = None
 
+    def delete_model(self, name: str) -> None:
+        """
+        delete the specified model folder from the local models directory.
+        """
+        model_path: Path = MODELS_DIR / name
+        if not model_path.exists():
+            raise FileNotFoundError(f"model '{name}' does not exist.")
+
+        if self.active_name == name:
+            self.unload_current_model()
+
+        import shutil
+        if model_path.is_dir():
+            shutil.rmtree(model_path)
+        else:
+            model_path.unlink()
+
+    def rename_model(self, old_name: str, new_name: str) -> None:
+        """
+        rename the specified model folder in the local models directory.
+        """
+        old_path: Path = MODELS_DIR / old_name
+        new_path: Path = MODELS_DIR / new_name
+
+        if not old_path.exists():
+            raise FileNotFoundError(f"model '{old_name}' does not exist.")
+        if new_path.exists():
+            raise FileExistsError(f"a model named '{new_name}' already exists.")
+
+        if self.active_name == old_name:
+            self.unload_current_model()
+
+        old_path.rename(new_path)
+
     def generate_response(self, prompt: str, model_name: Optional[str] = None, **kwargs: Any) -> str:
         """
         route inference execution to the loaded harness.

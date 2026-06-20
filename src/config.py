@@ -5,16 +5,17 @@ from typing import Optional
 # base directories
 BASE_DIR: Path = Path(__file__).resolve().parent.parent
 MODELS_DIR: Path = Path.home() / ".strata" / "models"
+LOGS_DIR: Path = Path.home() / ".strata" / "logs"
 
 # hugging face token (optional, from environment)
 HF_TOKEN: Optional[str] = os.getenv("HF_TOKEN")
 
-# ensure models directory exists
-try:
-    MODELS_DIR.mkdir(parents=True, exist_ok=True)
-except OSError as err:
-    # log failure or raise with descriptive error message
-    raise OSError(f"failed to create models directory at {MODELS_DIR}: {err}") from err
+# ensure models and logs directories exist
+for _dir in (MODELS_DIR, LOGS_DIR):
+    try:
+        _dir.mkdir(parents=True, exist_ok=True)
+    except OSError as err:
+        raise OSError(f"failed to create directory at {_dir}: {err}") from err
 
 # migrate legacy models if any exist
 LEGACY_MODELS_DIR: Path = BASE_DIR / "models"

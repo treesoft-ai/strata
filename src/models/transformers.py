@@ -98,8 +98,9 @@ class TransformersHarness(BaseModelHarness):
             temperature: float = kwargs.get("temperature", 0.7)
             do_sample: bool = temperature > 0.0
 
-            # process input prompt tokens
-            inputs = self._tokenizer(prompt, return_tensors="pt").to(self._device)
+            # process input prompt tokens; use a single space if prompt is empty
+            effective_prompt = prompt if prompt else " "
+            inputs = self._tokenizer(effective_prompt, return_tensors="pt").to(self._device)
 
             # resolve missing padding token IDs (standard on causal model tokenizers like GPT/Llama)
             pad_token_id = self._tokenizer.pad_token_id
@@ -120,7 +121,7 @@ class TransformersHarness(BaseModelHarness):
                 eos_token_id=self._tokenizer.eos_token_id
             )
 
-            thread = Thread(target=self._model.generate, kwargs=generation_kwargs)
+            thread = Thread(target=self._model.generate, kwargs=generation_kwargs, daemon=True)
             thread.start()
 
             # yield tokens as they arrive

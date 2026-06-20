@@ -75,8 +75,11 @@ class GGUFHarness(BaseModelHarness):
             max_tokens: int = kwargs.get("max_tokens", 256)
             temperature: float = kwargs.get("temperature", 0.7)
 
+            # llama-cpp requires a non-empty prompt; use a single space as fallback
+            effective_prompt = prompt if prompt else " "
+
             response_generator = self._model(
-                prompt,
+                effective_prompt,
                 max_tokens=max_tokens,
                 temperature=temperature,
                 stream=True
