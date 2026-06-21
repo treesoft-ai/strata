@@ -6,12 +6,13 @@ from typing import Optional
 BASE_DIR: Path = Path(__file__).resolve().parent.parent
 MODELS_DIR: Path = Path.home() / ".strata" / "models"
 LOGS_DIR: Path = Path.home() / ".strata" / "logs"
+TRAINED_DIR: Path = Path.home() / ".strata" / "trained"
 
 # hugging face token (optional, from environment)
 HF_TOKEN: Optional[str] = os.getenv("HF_TOKEN")
 
-# ensure models and logs directories exist
-for _dir in (MODELS_DIR, LOGS_DIR):
+# ensure models, logs, and trained directories exist
+for _dir in (MODELS_DIR, LOGS_DIR, TRAINED_DIR):
     try:
         _dir.mkdir(parents=True, exist_ok=True)
     except OSError as err:

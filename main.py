@@ -15,7 +15,7 @@ logging.getLogger("urllib3").setLevel(logging.ERROR)
 os.environ["TRANSFORMERS_VERBOSITY"] = "error"
 os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
 
-from src.config import MODELS_DIR, LOGS_DIR
+from src.config import MODELS_DIR, LOGS_DIR, TRAINED_DIR
 from src.models.downloader import download_model
 from src.models.manager import ModelManager
 
@@ -38,6 +38,7 @@ def print_root_help() -> None:
     print("  list        List models or logs")
     print("  rm          Remove a model")
     print("  rename      Rename a model")
+    print("  train       Fine-tune a model on a Strata JSONL dataset")
     print("  view        View a log file\n")
     print("  Run 'uv run main.py <command> --help' for details on a command.")
 
@@ -70,6 +71,42 @@ def print_view_help() -> None:
     print_header("Logs")
     print("  Usage: uv run main.py view {filename | path}\n")
     print("  Opens the specified log file in Notepad (Windows) or a CLI editor (Linux).")
+
+
+def print_train_help() -> None:
+    print_header("Train")
+    print("  Usage: uv run main.py train {model_name} --data {file.jsonl} [options]\n")
+    print("  Fine-tunes a local Transformers model using a Strata JSONL dataset.\n")
+    print("  Required")
+    print("  --data path          Path to a Strata .jsonl training dataset\n")
+    print("  Method")
+    print("  --method lora        LoRA fine-tune (default)")
+    print("  --method qlora       QLoRA 4-bit fine-tune (low VRAM)")
+    print("  --method full        Full parameter fine-tune")
+    print("  --method dpo         DPO preference training\n")
+    print("  LoRA / QLoRA")
+    print("  --lora-r N           LoRA rank (default: 16)")
+    print("  --lora-alpha N       LoRA alpha (default: 32)")
+    print("  --lora-dropout F     LoRA dropout (default: 0.05)")
+    print("  --lora-modules m,..  Target modules, comma-separated (default: q_proj,v_proj)\n")
+    print("  Training loop")
+    print("  --epochs N           Number of training epochs (default: 3)")
+    print("  --batch-size N       Per-device batch size (default: 2)")
+    print("  --grad-accum N       Gradient accumulation steps (default: 4)")
+    print("  --lr F               Learning rate (default: 2e-4)")
+    print("  --warmup N           Warmup steps (default: 10)")
+    print("  --max-seq N          Maximum sequence length (default: 512)")
+    print("  --weight-decay F     Weight decay (default: 0.01)")
+    print("  --seed N             Random seed (default: 42)\n")
+    print("  DPO")
+    print("  --dpo-beta F         KL penalty coefficient (default: 0.1)\n")
+    print("  Output")
+    print("  --run-name name      Name for the training run (default: model_name + timestamp)")
+    print("  --no-resume          Do not resume from an existing checkpoint\n")
+    print("  Dataset format (Strata JSONL — one JSON object per line)")
+    print("  SFT:   {\"prompt\": \"...\", \"completion\": \"...\"}")
+    print("  Chat:  {\"messages\": [{\"role\": \"user\", \"content\": \"...\"}, ...]}")
+    print("  DPO:   {\"prompt\": \"...\", \"chosen\": \"...\", \"rejected\": \"...\"}")
 
 
 def print_run_help() -> None:
@@ -384,6 +421,91 @@ def parse_run_args(args: list) -> dict:
     return opts
 
 
+def parse_train_args(args: list) -> dict:
+    """
+    Parse flags for the train command.
+    Returns a dict matching TrainingConfig fields plus model_name.
+    """
+    opts = {
+        "model_name": None,
+        "data_path": None,
+        "method": "lora",
+        "run_name": None,
+        "lora_r": 16,
+        "lora_alpha": 32,
+        "lora_dropout": 0.05,
+        "lora_target_modules": ["q_proj", "v_proj"],
+        "epochs": 3,
+        "batch_size": 2,
+        "gradient_accumulation_steps": 4,
+        "learning_rate": 2e-4,
+        "warmup_steps": 10,
+        "max_seq_length": 512,
+        "weight_decay": 0.01,
+        "seed": 42,
+        "dpo_beta": 0.1,
+        "resume": True,
+    }
+
+    positional = []
+    i = 0
+    while i < len(args):
+        arg = args[i]
+
+        def _next(flag: str) -> str:
+            nonlocal i
+            i += 1
+            if i >= len(args):
+                raise ValueError(f"Option {flag} expects a value.")
+            return args[i]
+
+        if arg == "--data":
+            opts["data_path"] = _next("--data")
+        elif arg == "--method":
+            v = _next("--method")
+            if v not in ("lora", "qlora", "full", "dpo"):
+                raise ValueError(f"--method must be one of: lora, qlora, full, dpo. Got '{v}'.")
+            opts["method"] = v
+        elif arg == "--run-name":
+            opts["run_name"] = _next("--run-name")
+        elif arg == "--lora-r":
+            opts["lora_r"] = int(_next("--lora-r"))
+        elif arg == "--lora-alpha":
+            opts["lora_alpha"] = int(_next("--lora-alpha"))
+        elif arg == "--lora-dropout":
+            opts["lora_dropout"] = float(_next("--lora-dropout"))
+        elif arg == "--lora-modules":
+            opts["lora_target_modules"] = [m.strip() for m in _next("--lora-modules").split(",")]
+        elif arg == "--epochs":
+            opts["epochs"] = int(_next("--epochs"))
+        elif arg == "--batch-size":
+            opts["batch_size"] = int(_next("--batch-size"))
+        elif arg == "--grad-accum":
+            opts["gradient_accumulation_steps"] = int(_next("--grad-accum"))
+        elif arg == "--lr":
+            opts["learning_rate"] = float(_next("--lr"))
+        elif arg == "--warmup":
+            opts["warmup_steps"] = int(_next("--warmup"))
+        elif arg == "--max-seq":
+            opts["max_seq_length"] = int(_next("--max-seq"))
+        elif arg == "--weight-decay":
+            opts["weight_decay"] = float(_next("--weight-decay"))
+        elif arg == "--seed":
+            opts["seed"] = int(_next("--seed"))
+        elif arg == "--dpo-beta":
+            opts["dpo_beta"] = float(_next("--dpo-beta"))
+        elif arg == "--no-resume":
+            opts["resume"] = False
+        else:
+            positional.append(arg)
+        i += 1
+
+    if positional:
+        opts["model_name"] = positional[0]
+
+    return opts
+
+
 def main() -> None:
     """
     command line entrypoint for strata.
@@ -411,11 +533,13 @@ def main() -> None:
             print_view_help()
         elif command == "run":
             print_run_help()
+        elif command == "train":
+            print_train_help()
         else:
             print_root_help()
         sys.exit(0)
 
-    valid_commands = {"download", "run", "list", "rm", "rename", "view"}
+    valid_commands = {"download", "run", "list", "rm", "rename", "view", "train"}
     if command not in valid_commands:
         print_error("Help", f"Unknown command '{command}'.", "Run 'uv run main.py' to see the list of available commands.")
         sys.exit(1)
@@ -756,6 +880,101 @@ def main() -> None:
 
         except Exception as err:
             print_error("Run", str(err), "Check model paths, hardware drivers, or options spelling.")
+            sys.exit(1)
+        sys.exit(0)
+
+    elif command == "train":
+        try:
+            train_args = parse_train_args(args[1:])
+        except ValueError as err:
+            print_error("Train", str(err), "Run 'uv run main.py train --help' for usage.")
+            sys.exit(1)
+
+        if train_args["model_name"] is None:
+            print_error("Train", "Model name is missing.", "Run 'uv run main.py train {model_name} --data {file.jsonl}'.")
+            sys.exit(1)
+        if not train_args["data_path"]:
+            print_error("Train", "Dataset path is missing.", "Use --data {file.jsonl} to specify the training dataset.")
+            sys.exit(1)
+
+        print_header("Train")
+
+        try:
+            from src.training.config import TrainingConfig
+            from src.training.trainer import run_training
+            from src.training.dataset import load_dataset
+
+            # resolve run name
+            run_name = train_args["run_name"] or f"{train_args['model_name']}_{int(time.time())}"
+            output_dir = str(TRAINED_DIR / run_name)
+
+            # build config
+            cfg = TrainingConfig(
+                model_name=train_args["model_name"],
+                run_name=run_name,
+                data_path=train_args["data_path"],
+                method=train_args["method"],
+                lora_r=train_args["lora_r"],
+                lora_alpha=train_args["lora_alpha"],
+                lora_dropout=train_args["lora_dropout"],
+                lora_target_modules=train_args["lora_target_modules"],
+                epochs=train_args["epochs"],
+                batch_size=train_args["batch_size"],
+                gradient_accumulation_steps=train_args["gradient_accumulation_steps"],
+                learning_rate=train_args["learning_rate"],
+                warmup_steps=train_args["warmup_steps"],
+                max_seq_length=train_args["max_seq_length"],
+                weight_decay=train_args["weight_decay"],
+                seed=train_args["seed"],
+                dpo_beta=train_args["dpo_beta"],
+                resume=train_args["resume"],
+                output_dir=output_dir,
+            )
+
+            # peek at dataset before training starts
+            with suppress_stderr():
+                ds_info = load_dataset(cfg.data_path)
+
+            steps_per_epoch = max(
+                1, (ds_info["count"] // (cfg.batch_size * cfg.gradient_accumulation_steps))
+            )
+            total_steps = steps_per_epoch * cfg.epochs
+
+            print(f"  Model:      {cfg.model_name.lower()}")
+            print(f"  Method:     {cfg.method}")
+            print(f"  Task:       {ds_info['task']}")
+            print(f"  Dataset:    {ds_info['count']} rows ({cfg.data_path})")
+            print(f"  Epochs:     {cfg.epochs}")
+            print(f"  Steps:      {total_steps}")
+            print(f"  Run name:   {run_name}")
+            print(f"  Output:     {output_dir}")
+            if ds_info["skipped"]:
+                print(f"\n  ~ Warning: {ds_info['skipped']} unrecognisable rows skipped.")
+            print()
+
+            # live progress: overwrite the current line each step
+            _last_line_len = [0]
+
+            def _progress(step: int, total: int, loss: float) -> None:
+                line = f"  Step {step}/{total}   loss {loss:.4f}"
+                pad = max(0, _last_line_len[0] - len(line))
+                print(f"\r{line}{' ' * pad}", end="", flush=True)
+                _last_line_len[0] = len(line)
+
+            with suppress_stderr():
+                final_dir = run_training(cfg, progress_callback=_progress)
+
+            print(f"\r  {'Training complete.'.ljust(_last_line_len[0])}", flush=True)
+            print()
+            print(f"  Model saved to {final_dir}")
+
+        except FileNotFoundError as err:
+            print(f"\n  ! Error: {str(err)}\n")
+            print("  Run 'uv run main.py list models' to see available models.")
+            sys.exit(1)
+        except Exception as err:
+            print(f"\n  ! Error: {str(err)}\n")
+            print("  Check your dataset format, model name, and available VRAM.")
             sys.exit(1)
         sys.exit(0)
 
