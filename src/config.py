@@ -7,12 +7,17 @@ BASE_DIR: Path = Path(__file__).resolve().parent.parent
 MODELS_DIR: Path = Path.home() / ".strata" / "models"
 LOGS_DIR: Path = Path.home() / ".strata" / "logs"
 TRAINED_DIR: Path = Path.home() / ".strata" / "trained"
+CONFIGS_DIR: Path = Path.home() / ".strata" / "configs"
+DATASETS_DIR: Path = Path.home() / ".strata" / "datasets"
+
+# openrouter key file
+OPENROUTER_KEY_FILE: Path = Path.home() / ".strata" / "openrouter.json"
 
 # hugging face token (optional, from environment)
 HF_TOKEN: Optional[str] = os.getenv("HF_TOKEN")
 
-# ensure models, logs, and trained directories exist
-for _dir in (MODELS_DIR, LOGS_DIR, TRAINED_DIR):
+# ensure core directories exist
+for _dir in (MODELS_DIR, LOGS_DIR, TRAINED_DIR, CONFIGS_DIR, DATASETS_DIR):
     try:
         _dir.mkdir(parents=True, exist_ok=True)
     except OSError as err:

@@ -39,6 +39,7 @@ def print_root_help() -> None:
     print("  rm          Remove a model")
     print("  rename      Rename a model")
     print("  train       Fine-tune a model on a Strata JSONL dataset")
+    print("  synthesize  Generate synthetic JSONL datasets with AI")
     print("  view        View a log file\n")
     print("  Run 'uv run main.py <command> --help' for details on a command.")
 
@@ -132,6 +133,46 @@ def print_run_help() -> None:
     print("  --temperature F  Sampling temperature (default: 0.7)")
     print("  --log            Save execution logs to a json file")
     print("  --log-file path  Path to save the execution logs")
+
+
+def print_synthesize_help() -> None:
+    print_header("Synthesize")
+    print("  Usage: uv run main.py synthesize {config_name}          Run synthesis using a config")
+    print("         uv run main.py synthesize config list             List available configs")
+    print("         uv run main.py synthesize config show {name}      Show config details")
+    print("         uv run main.py synthesize config rm {name}        Delete a config")
+    print("         uv run main.py synthesize key set {api_key}       Store OpenRouter API key")
+    print("         uv run main.py synthesize key show                Show stored API key (masked)\n")
+    print("  Generates a synthetic Strata JSONL dataset using an OpenRouter AI model.")
+    print("  Output is saved to ~/.strata/datasets/{timestamp}_{id}.jsonl by default.\n")
+    print("  Standard config (~/.strata/configs/{name}.json)  mode: \"standard\"")
+    print("  name          Config identifier")
+    print("  description   Human-readable description")
+    print("  mode          \"standard\"")
+    print("  user_prompt   Instructions for the AI (what data to generate)")
+    print("  model         OpenRouter model ID  (e.g. inclusionai/ling-2.6-flash)")
+    print("  task          sft | chat | dpo | rl")
+    print("  count         Total examples to generate")
+    print("  temperature   Sampling temperature (0.0 – 2.0)")
+    print("  batch_size    Examples requested per API call\n")
+    print("  GFS config (~/.strata/configs/{name}.json)  mode: \"gfs\"")
+    print("  name          Config identifier")
+    print("  description   Human-readable description")
+    print("  mode          \"gfs\"")
+    print("  source        Path to a file or directory of source material")
+    print("  glob          Optional glob filter for directories (e.g. \"**/*.py\")")
+    print("  prompts       List of prompts — one pass per prompt per source unit")
+    print("  model         OpenRouter model ID")
+    print("  task          sft | chat | dpo | rl")
+    print("  count         Examples per prompt per source unit")
+    print("  temperature   Sampling temperature (0.0 – 2.0)")
+    print("  batch_size    Examples requested per API call")
+    print("  max_source_chars  Truncate source units to this length (default 8000)\n")
+    print("  Dataset format (Strata JSONL — one JSON object per line)")
+    print("  SFT:   {\"prompt\": \"...\", \"completion\": \"...\"}")
+    print("  Chat:  {\"messages\": [{\"role\": \"user\", \"content\": \"...\"}, ...]}")
+    print("  DPO:   {\"prompt\": \"...\", \"chosen\": \"...\", \"rejected\": \"...\"}")
+    print("  RL:    {\"prompt\": \"...\"}")
 
 
 import contextlib
@@ -567,11 +608,13 @@ def main() -> None:
             print_run_help()
         elif command == "train":
             print_train_help()
+        elif command == "synthesize":
+            print_synthesize_help()
         else:
             print_root_help()
         sys.exit(0)
 
-    valid_commands = {"download", "run", "list", "rm", "rename", "view", "train"}
+    valid_commands = {"download", "run", "list", "rm", "rename", "view", "train", "synthesize"}
     if command not in valid_commands:
         print_error("Help", f"Unknown command '{command}'.", "Run 'uv run main.py' to see the list of available commands.")
         sys.exit(1)
@@ -1015,6 +1058,219 @@ def main() -> None:
             print(f"\n  ! Error: {str(err)}\n")
             print("  Check your dataset format, model name, and available VRAM.")
             sys.exit(1)
+        sys.exit(0)
+
+    elif command == "synthesize":
+        from src.synthesize.config import SynthConfig, GFSConfig, load_any_config, list_configs, delete_config
+        from src.synthesize.openrouter import save_key, load_key, key_exists
+        from src.synthesize.generator import synthesize
+        from src.synthesize.gfs import synthesize_gfs
+        from src.config import DATASETS_DIR
+
+        sub_args = args[1:]
+
+        # ---- key subcommand ------------------------------------------------
+        if sub_args and sub_args[0].lower() == "key":
+            print_header("Synthesize")
+            if len(sub_args) < 2:
+                print_error("Synthesize", "Key subcommand missing.", "Use 'key set {api_key}' or 'key show'.")
+                sys.exit(1)
+            key_sub = sub_args[1].lower()
+            if key_sub == "set":
+                if len(sub_args) < 3:
+                    print_error("Synthesize", "API key value is missing.", "Run 'uv run main.py synthesize key set {api_key}'.")
+                    sys.exit(1)
+                save_key(sub_args[2])
+                print("  OpenRouter API key saved.")
+            elif key_sub == "show":
+                if not key_exists():
+                    print("  No API key stored.")
+                else:
+                    k = load_key()
+                    masked = k[:8] + "..." + k[-4:] if len(k) > 12 else "****"
+                    print(f"  API key: {masked}")
+            else:
+                print_error("Synthesize", f"Unknown key subcommand '{key_sub}'.", "Use 'key set {api_key}' or 'key show'.")
+                sys.exit(1)
+            sys.exit(0)
+
+        # ---- config subcommand ---------------------------------------------
+        if sub_args and sub_args[0].lower() == "config":
+            print_header("Synthesize / Config")
+            if len(sub_args) < 2:
+                print_error("Synthesize", "Config subcommand missing.", "Use 'config list', 'config show {name}', or 'config rm {name}'.")
+                sys.exit(1)
+            cfg_sub = sub_args[1].lower()
+            if cfg_sub == "list":
+                entries = list_configs()
+                if not entries:
+                    print("  No configs found.")
+                else:
+                    print("  Name".ljust(32) + "Mode".ljust(12) + "Task".ljust(8) + "Count".ljust(8) + "Model")
+                    for e in entries:
+                        print(f"  {e['name'].ljust(30)}  {e['mode'].ljust(10)}  {str(e['task']).ljust(6)}  {str(e['count']).ljust(6)}  {e['model']}")
+            elif cfg_sub == "show":
+                if len(sub_args) < 3:
+                    print_error("Synthesize", "Config name missing.", "Run 'uv run main.py synthesize config show {name}'.")
+                    sys.exit(1)
+                try:
+                    c = load_any_config(sub_args[2])
+                    print(f"  Name:        {c.name}")
+                    print(f"  Description: {c.description}")
+                    print(f"  Mode:        {c.mode}")
+                    print(f"  Model:       {c.model}")
+                    print(f"  Task:        {c.task}")
+                    print(f"  Count:       {c.count}")
+                    print(f"  Temperature: {c.temperature}")
+                    print(f"  Batch size:  {c.batch_size}")
+                    if isinstance(c, GFSConfig):
+                        print(f"  Source:      {c.source}")
+                        if c.glob:
+                            print(f"  Glob:        {c.glob}")
+                        print(f"  Max chars:   {c.max_source_chars}")
+                        print(f"\n  Prompts ({len(c.prompts)}):")
+                        for i, p in enumerate(c.prompts, 1):
+                            print(f"    [{i}] {p}")
+                    else:
+                        print(f"\n  User prompt:")
+                        for line in c.user_prompt.splitlines():
+                            print(f"    {line}")
+                except FileNotFoundError as err:
+                    print_error("Synthesize", str(err), "Run 'uv run main.py synthesize config list' to see available configs.")
+                    sys.exit(1)
+            elif cfg_sub == "rm":
+                if len(sub_args) < 3:
+                    print_error("Synthesize", "Config name missing.", "Run 'uv run main.py synthesize config rm {name}'.")
+                    sys.exit(1)
+                try:
+                    delete_config(sub_args[2])
+                    print(f"  Config '{sub_args[2]}' deleted.")
+                except FileNotFoundError as err:
+                    print_error("Synthesize", str(err), "Run 'uv run main.py synthesize config list' to see available configs.")
+                    sys.exit(1)
+            else:
+                print_error("Synthesize", f"Unknown config subcommand '{cfg_sub}'.", "Use 'config list', 'config show {name}', or 'config rm {name}'.")
+                sys.exit(1)
+            sys.exit(0)
+
+        # ---- run synthesis -------------------------------------------------
+        if not sub_args:
+            print_synthesize_help()
+            sys.exit(1)
+
+        config_name = sub_args[0]
+        print_header("Synthesize")
+
+        try:
+            cfg = load_any_config(config_name)
+        except FileNotFoundError as err:
+            print_error("Synthesize", str(err), "Run 'uv run main.py synthesize config list' to see available configs.")
+            sys.exit(1)
+
+        try:
+            cfg.validate()
+        except ValueError as err:
+            print_error("Synthesize", str(err), "Edit the config file to fix the issue.")
+            sys.exit(1)
+
+        if not key_exists():
+            print_error("Synthesize", "OpenRouter API key is not set.", "Run 'uv run main.py synthesize key set {api_key}'.")
+            sys.exit(1)
+
+        # build output path
+        import random
+        import string
+        _ts = time.strftime("%Y%m%d_%H%M%S")
+        _rid = "".join(random.choices(string.ascii_lowercase + string.digits, k=6))
+        output_path = DATASETS_DIR / f"{_ts}_{_rid}.jsonl"
+
+        _last_line_len = [0]
+
+        def _overwrite_line(text: str) -> None:
+            pad = max(0, _last_line_len[0] - len(text))
+            print(f"\r{text}{' ' * pad}", end="", flush=True)
+            _last_line_len[0] = len(text)
+
+        if isinstance(cfg, GFSConfig):
+            # ---- GFS mode --------------------------------------------------
+            print(f"  Config:   {cfg.name}  —  {cfg.description}")
+            print(f"  Mode:     gfs")
+            print(f"  Model:    {cfg.model}")
+            print(f"  Task:     {cfg.task}")
+            print(f"  Source:   {cfg.source}")
+            print(f"  Prompts:  {len(cfg.prompts)}")
+            print(f"  Count:    {cfg.count} per prompt per source unit")
+            print(f"  Output:   {output_path}\n")
+
+            def _gfs_progress(src_idx, total_src, prm_idx, total_prm, generated, skipped):
+                line = (
+                    f"  Source {src_idx}/{total_src}  "
+                    f"Prompt {prm_idx}/{total_prm}  "
+                    f"Generated {generated}"
+                )
+                if skipped:
+                    line += f"  [{skipped} skipped]"
+                _overwrite_line(line)
+
+            try:
+                result = synthesize_gfs(cfg, output_path, progress_callback=_gfs_progress)
+            except (FileNotFoundError, ValueError) as err:
+                print(f"\n\n  ! Error: {str(err)}\n")
+                print("  Check the 'source' path and glob pattern in your config.")
+                sys.exit(1)
+            except RuntimeError as err:
+                print(f"\n\n  ! Error: {str(err)}\n")
+                print("  Check your OpenRouter API key and model name.")
+                sys.exit(1)
+            except Exception as err:
+                print(f"\n\n  ! Error: {str(err)}\n")
+                sys.exit(1)
+
+            elapsed = result["elapsed_s"]
+            _overwrite_line("  Done.")
+            print()
+            print()
+            print(f"  Generated: {result['generated']} examples  ({elapsed:.1f}s)")
+            print(f"  Sources:   {result['sources']} source units processed")
+            if result["skipped"]:
+                print(f"  Skipped:   {result['skipped']} invalid lines from model output")
+            print(f"  Saved to:  {result['output']}")
+
+        else:
+            # ---- standard mode ---------------------------------------------
+            print(f"  Config:   {cfg.name}  —  {cfg.description}")
+            print(f"  Mode:     standard")
+            print(f"  Model:    {cfg.model}")
+            print(f"  Task:     {cfg.task}")
+            print(f"  Target:   {cfg.count} examples")
+            print(f"  Output:   {output_path}\n")
+
+            def _synth_progress(generated: int, target: int, skipped: int) -> None:
+                pct = int(generated / target * 100)
+                line = f"  Generating... {generated}/{target}  ({pct}%)"
+                if skipped:
+                    line += f"  [{skipped} invalid lines skipped]"
+                _overwrite_line(line)
+
+            try:
+                result = synthesize(cfg, output_path, progress_callback=_synth_progress)
+            except RuntimeError as err:
+                print(f"\n\n  ! Error: {str(err)}\n")
+                print("  Check your OpenRouter API key and model name.")
+                sys.exit(1)
+            except Exception as err:
+                print(f"\n\n  ! Error: {str(err)}\n")
+                sys.exit(1)
+
+            elapsed = result["elapsed_s"]
+            _overwrite_line("  Done.")
+            print()
+            print()
+            print(f"  Generated: {result['generated']} examples  ({elapsed:.1f}s)")
+            if result["skipped"]:
+                print(f"  Skipped:   {result['skipped']} invalid lines from model output")
+            print(f"  Saved to:  {result['output']}")
+
         sys.exit(0)
 
     elif command == "view":
