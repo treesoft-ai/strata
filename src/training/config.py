@@ -24,9 +24,9 @@ class TrainingConfig:
     # ------------------------------------------------------------------ #
     # method
     # ------------------------------------------------------------------ #
-    method: Literal["lora", "qlora", "full", "dpo"] = "lora"
+    method: Literal["lora", "qlora", "full", "dpo", "grpo", "ppo"] = "lora"
     # task is auto-detected from the dataset; can be overridden here
-    task: Optional[Literal["sft", "chat", "dpo"]] = None
+    task: Optional[Literal["sft", "chat", "dpo", "rl"]] = None
 
     # ------------------------------------------------------------------ #
     # LoRA / QLoRA settings (ignored for method=full)
@@ -59,6 +59,17 @@ class TrainingConfig:
     # DPO-specific
     # ------------------------------------------------------------------ #
     dpo_beta: float = 0.1          # KL penalty coefficient for DPO
+
+    # ------------------------------------------------------------------ #
+    # RL-specific (GRPO and PPO)
+    # ------------------------------------------------------------------ #
+    grpo_beta: float = 0.04        # KL penalty for GRPO
+    ppo_beta: float = 0.1          # KL penalty for PPO
+    reward_model: str = ""         # path to HF reward model (PPO)
+    reward_fn: str = ""            # path to Python script with reward() (GRPO / PPO)
+    num_generations: int = 4       # GRPO: completions sampled per prompt
+    max_new_tokens: int = 256      # generation length cap for RL loops
+    use_lora: bool = False         # apply LoRA adapters during GRPO/PPO
 
     # ------------------------------------------------------------------ #
     # checkpointing & output

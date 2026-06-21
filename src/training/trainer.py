@@ -7,6 +7,8 @@ Dispatches to the correct training strategy based on TrainingConfig.method:
   qlora  — QLoRA (4-bit base + LoRA adapters) via PEFT + TRL SFTTrainer
   full   — Full fine-tune via TRL SFTTrainer (no PEFT)
   dpo    — DPO preference training via TRL DPOTrainer
+  grpo   — GRPO reinforcement learning via TRL GRPOTrainer
+  ppo    — PPO reinforcement learning via TRL PPOTrainer
 
 Progress callback signature:
     progress_callback(step: int, total_steps: int, loss: float) -> None
@@ -22,7 +24,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from .config import TrainingConfig
-from .dataset import TASK_DPO, TASK_CHAT, TASK_SFT, load_dataset, to_hf_dataset
+from .dataset import TASK_DPO, TASK_CHAT, TASK_SFT, TASK_RL, load_dataset, to_hf_dataset
 
 
 # ------------------------------------------------------------------ #
@@ -171,6 +173,37 @@ def _make_hf_callback(
     return _StrataCallback()
 
 
+def _load_reward_fn(script_path: str):
+    """
+    Import a user-supplied reward script and return its ``reward`` callable.
+
+    The script must expose a top-level function with signature:
+        reward(prompt: str, response: str) -> float
+    """
+    import importlib.util
+
+    path = Path(script_path).resolve()
+    if not path.exists():
+        raise FileNotFoundError(f"Reward script not found: {path}")
+
+    spec = importlib.util.spec_from_file_location("_strata_reward_fn", path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Cannot create module spec from: {path}")
+
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    if not hasattr(module, "reward"):
+        raise AttributeError(
+            f"Reward script '{path}' must define a top-level function "
+            "`reward(prompt: str, response: str) -> float`."
+        )
+    fn = module.reward
+    if not callable(fn):
+        raise TypeError(f"`reward` in '{path}' is not callable.")
+    return fn
+
+
 # ------------------------------------------------------------------ #
 # public API
 # ------------------------------------------------------------------ #
@@ -200,6 +233,25 @@ def run_training(
             f"'{cfg.method}'. Use --method dpo."
         )
 
+    if cfg.method in ("grpo", "ppo") and task != TASK_RL:
+        raise ValueError(
+            f"Method '{cfg.method}' requires an RL dataset "
+            "(rows with only a 'prompt' field). "
+            f"Detected task type: '{task}'."
+        )
+    if task == TASK_RL and cfg.method not in ("grpo", "ppo"):
+        raise ValueError(
+            "Dataset contains RL rows (prompt-only) but method is "
+            f"'{cfg.method}'. Use --method grpo or --method ppo."
+        )
+    if cfg.method == "ppo" and not cfg.reward_model and not cfg.reward_fn:
+        raise ValueError(
+            "Method 'ppo' requires at least one reward source. "
+            "Use --reward-model <path> or --reward-fn <script.py>."
+        )
+    if cfg.reward_fn and not Path(cfg.reward_fn).exists():
+        raise FileNotFoundError(f"Reward script not found: {cfg.reward_fn}")
+
     hf_ds = to_hf_dataset(strata_ds)
 
     # total optimiser steps for the progress bar
@@ -218,6 +270,10 @@ def run_training(
         final_dir = _train_sft(cfg, hf_ds, task, total_steps, progress_callback, resume_from)
     elif cfg.method == "dpo":
         final_dir = _train_dpo(cfg, hf_ds, total_steps, progress_callback, resume_from)
+    elif cfg.method == "grpo":
+        final_dir = _train_grpo(cfg, hf_ds, total_steps, progress_callback, resume_from)
+    elif cfg.method == "ppo":
+        final_dir = _train_ppo(cfg, hf_ds, total_steps, progress_callback, resume_from)
     else:
         raise ValueError(f"Unsupported method+task combination: method={cfg.method}, task={task}")
 
@@ -342,6 +398,158 @@ def _train_dpo(
         callbacks=[callback] if callback else [],
     )
 
+    trainer.train(resume_from_checkpoint=resume_from)
+
+    final_dir = str(Path(cfg.output_dir) / "model")
+    trainer.save_model(final_dir)
+    tokenizer.save_pretrained(final_dir)
+    return final_dir
+
+
+def _train_grpo(
+    cfg: TrainingConfig,
+    hf_ds,
+    total_steps: int,
+    progress_callback,
+    resume_from: Optional[str],
+) -> str:
+    """GRPO training via TRL GRPOTrainer."""
+    from trl import GRPOTrainer, GRPOConfig
+
+    model, tokenizer = _load_base_model_and_tokenizer(cfg)
+
+    peft_config = None
+    if cfg.use_lora:
+        from peft import get_peft_model
+        peft_config = _make_lora_config(cfg)
+        model = get_peft_model(model, peft_config)
+
+    training_args = _build_training_args(cfg, total_steps)
+    callback = _make_hf_callback(progress_callback, total_steps)
+
+    reward_fn = None
+    if cfg.reward_fn:
+        reward_fn = _load_reward_fn(cfg.reward_fn)
+
+    grpo_config = GRPOConfig(
+        output_dir=str(Path(cfg.output_dir) / "checkpoints"),
+        num_train_epochs=cfg.epochs,
+        per_device_train_batch_size=cfg.batch_size,
+        gradient_accumulation_steps=cfg.gradient_accumulation_steps,
+        learning_rate=cfg.learning_rate,
+        warmup_steps=cfg.warmup_steps,
+        weight_decay=cfg.weight_decay,
+        fp16=training_args.fp16,
+        bf16=training_args.bf16,
+        logging_steps=1,
+        save_strategy="epoch",
+        save_total_limit=cfg.epochs,
+        seed=cfg.seed,
+        report_to="none",
+        disable_tqdm=True,
+        beta=cfg.grpo_beta,
+        num_generations=cfg.num_generations,
+        max_new_tokens=cfg.max_new_tokens,
+    )
+
+    trainer_kwargs = dict(
+        model=model,
+        args=grpo_config,
+        train_dataset=hf_ds,
+        tokenizer=tokenizer,
+        callbacks=[callback] if callback else [],
+    )
+    if peft_config is not None:
+        trainer_kwargs["peft_config"] = peft_config
+    if reward_fn is not None:
+        trainer_kwargs["reward_funcs"] = reward_fn
+
+    trainer = GRPOTrainer(**trainer_kwargs)
+    trainer.train(resume_from_checkpoint=resume_from)
+
+    final_dir = str(Path(cfg.output_dir) / "model")
+    trainer.save_model(final_dir)
+    tokenizer.save_pretrained(final_dir)
+    return final_dir
+
+
+def _train_ppo(
+    cfg: TrainingConfig,
+    hf_ds,
+    total_steps: int,
+    progress_callback,
+    resume_from: Optional[str],
+) -> str:
+    """PPO training via TRL PPOTrainer."""
+    import torch
+    from trl import PPOTrainer, PPOConfig
+
+    model, tokenizer = _load_base_model_and_tokenizer(cfg)
+
+    peft_config = None
+    if cfg.use_lora:
+        from peft import get_peft_model
+        peft_config = _make_lora_config(cfg)
+        model = get_peft_model(model, peft_config)
+
+    training_args = _build_training_args(cfg, total_steps)
+    callback = _make_hf_callback(progress_callback, total_steps)
+
+    # Reward resolution: reward_fn takes precedence over reward_model
+    reward_fn = None
+    reward_model = None
+
+    if cfg.reward_fn:
+        _fn = _load_reward_fn(cfg.reward_fn)
+        def reward_fn(prompts, responses, **kwargs):
+            return [_fn(p, r) for p, r in zip(prompts, responses)]
+    elif cfg.reward_model:
+        from transformers import AutoModelForSequenceClassification
+        rm_path = str(Path.home() / ".strata" / "models" / cfg.reward_model)
+        if not Path(rm_path).exists():
+            rm_path = cfg.reward_model
+        reward_model = AutoModelForSequenceClassification.from_pretrained(
+            rm_path, trust_remote_code=True
+        )
+        if torch.cuda.is_available():
+            reward_model = reward_model.cuda()
+        reward_model.eval()
+
+    ppo_config = PPOConfig(
+        output_dir=str(Path(cfg.output_dir) / "checkpoints"),
+        num_train_epochs=cfg.epochs,
+        per_device_train_batch_size=cfg.batch_size,
+        gradient_accumulation_steps=cfg.gradient_accumulation_steps,
+        learning_rate=cfg.learning_rate,
+        warmup_steps=cfg.warmup_steps,
+        weight_decay=cfg.weight_decay,
+        fp16=training_args.fp16,
+        bf16=training_args.bf16,
+        logging_steps=1,
+        save_strategy="epoch",
+        save_total_limit=cfg.epochs,
+        seed=cfg.seed,
+        report_to="none",
+        disable_tqdm=True,
+        kl_coef=cfg.ppo_beta,
+        max_new_tokens=cfg.max_new_tokens,
+    )
+
+    trainer_kwargs = dict(
+        model=model,
+        args=ppo_config,
+        train_dataset=hf_ds,
+        tokenizer=tokenizer,
+        callbacks=[callback] if callback else [],
+    )
+    if peft_config is not None:
+        trainer_kwargs["peft_config"] = peft_config
+    if reward_fn is not None:
+        trainer_kwargs["reward_funcs"] = reward_fn
+    if reward_model is not None:
+        trainer_kwargs["reward_model"] = reward_model
+
+    trainer = PPOTrainer(**trainer_kwargs)
     trainer.train(resume_from_checkpoint=resume_from)
 
     final_dir = str(Path(cfg.output_dir) / "model")

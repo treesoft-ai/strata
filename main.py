@@ -83,7 +83,9 @@ def print_train_help() -> None:
     print("  --method lora        LoRA fine-tune (default)")
     print("  --method qlora       QLoRA 4-bit fine-tune (low VRAM)")
     print("  --method full        Full parameter fine-tune")
-    print("  --method dpo         DPO preference training\n")
+    print("  --method dpo         DPO preference training")
+    print("  --method grpo        GRPO reinforcement learning")
+    print("  --method ppo         PPO reinforcement learning\n")
     print("  LoRA / QLoRA")
     print("  --lora-r N           LoRA rank (default: 16)")
     print("  --lora-alpha N       LoRA alpha (default: 32)")
@@ -100,6 +102,14 @@ def print_train_help() -> None:
     print("  --seed N             Random seed (default: 42)\n")
     print("  DPO")
     print("  --dpo-beta F         KL penalty coefficient (default: 0.1)\n")
+    print("  GRPO / PPO")
+    print("  --grpo-beta F        GRPO KL penalty coefficient (default: 0.04)")
+    print("  --ppo-beta F         PPO KL penalty coefficient (default: 0.1)")
+    print("  --reward-model path  HF reward model path for PPO")
+    print("  --reward-fn path     Python script with reward(prompt, response)->float")
+    print("  --num-generations N  GRPO completions per prompt (default: 4)")
+    print("  --max-new-tokens N   Max tokens to generate per RL step (default: 256)")
+    print("  --use-lora           Apply LoRA adapters during GRPO/PPO\n")
     print("  Output")
     print("  --run-name name      Name for the training run (default: model_name + timestamp)")
     print("  --no-resume          Do not resume from an existing checkpoint\n")
@@ -107,6 +117,7 @@ def print_train_help() -> None:
     print("  SFT:   {\"prompt\": \"...\", \"completion\": \"...\"}")
     print("  Chat:  {\"messages\": [{\"role\": \"user\", \"content\": \"...\"}, ...]}")
     print("  DPO:   {\"prompt\": \"...\", \"chosen\": \"...\", \"rejected\": \"...\"}")
+    print("  RL:    {\"prompt\": \"...\"}  (GRPO / PPO)")
 
 
 def print_run_help() -> None:
@@ -444,6 +455,13 @@ def parse_train_args(args: list) -> dict:
         "weight_decay": 0.01,
         "seed": 42,
         "dpo_beta": 0.1,
+        "grpo_beta": 0.04,
+        "ppo_beta": 0.1,
+        "reward_model": "",
+        "reward_fn": "",
+        "num_generations": 4,
+        "max_new_tokens": 256,
+        "use_lora": False,
         "resume": True,
     }
 
@@ -463,8 +481,8 @@ def parse_train_args(args: list) -> dict:
             opts["data_path"] = _next("--data")
         elif arg == "--method":
             v = _next("--method")
-            if v not in ("lora", "qlora", "full", "dpo"):
-                raise ValueError(f"--method must be one of: lora, qlora, full, dpo. Got '{v}'.")
+            if v not in ("lora", "qlora", "full", "dpo", "grpo", "ppo"):
+                raise ValueError(f"--method must be one of: lora, qlora, full, dpo, grpo, ppo. Got '{v}'.")
             opts["method"] = v
         elif arg == "--run-name":
             opts["run_name"] = _next("--run-name")
@@ -494,6 +512,20 @@ def parse_train_args(args: list) -> dict:
             opts["seed"] = int(_next("--seed"))
         elif arg == "--dpo-beta":
             opts["dpo_beta"] = float(_next("--dpo-beta"))
+        elif arg == "--grpo-beta":
+            opts["grpo_beta"] = float(_next("--grpo-beta"))
+        elif arg == "--ppo-beta":
+            opts["ppo_beta"] = float(_next("--ppo-beta"))
+        elif arg == "--reward-model":
+            opts["reward_model"] = _next("--reward-model")
+        elif arg == "--reward-fn":
+            opts["reward_fn"] = _next("--reward-fn")
+        elif arg == "--num-generations":
+            opts["num_generations"] = int(_next("--num-generations"))
+        elif arg == "--max-new-tokens":
+            opts["max_new_tokens"] = int(_next("--max-new-tokens"))
+        elif arg == "--use-lora":
+            opts["use_lora"] = True
         elif arg == "--no-resume":
             opts["resume"] = False
         else:
@@ -927,6 +959,13 @@ def main() -> None:
                 weight_decay=train_args["weight_decay"],
                 seed=train_args["seed"],
                 dpo_beta=train_args["dpo_beta"],
+                grpo_beta=train_args["grpo_beta"],
+                ppo_beta=train_args["ppo_beta"],
+                reward_model=train_args["reward_model"],
+                reward_fn=train_args["reward_fn"],
+                num_generations=train_args["num_generations"],
+                max_new_tokens=train_args["max_new_tokens"],
+                use_lora=train_args["use_lora"],
                 resume=train_args["resume"],
                 output_dir=output_dir,
             )

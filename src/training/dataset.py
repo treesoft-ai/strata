@@ -22,6 +22,7 @@ from typing import Any
 TASK_SFT = "sft"
 TASK_CHAT = "chat"
 TASK_DPO = "dpo"
+TASK_RL = "rl"
 
 
 def _detect_row_type(row: dict) -> str | None:
@@ -33,6 +34,8 @@ def _detect_row_type(row: dict) -> str | None:
         return TASK_CHAT
     if "prompt" in keys and "completion" in keys:
         return TASK_SFT
+    if "prompt" in keys and "completion" not in keys and "chosen" not in keys and "messages" not in keys:
+        return TASK_RL
     return None
 
 
@@ -88,7 +91,7 @@ def load_dataset(path: str | Path) -> dict[str, Any]:
         raise ValueError(
             "Dataset is empty or contains no recognisable rows. "
             "Expected rows with fields: "
-            "(prompt + completion), (messages), or (prompt + chosen + rejected)."
+            "(prompt + completion), (messages), (prompt + chosen + rejected), or (prompt only for RL)."
         )
 
     return {
@@ -128,6 +131,8 @@ def to_hf_dataset(strata_dataset: dict[str, Any]):
             }
             for r in rows
         ]
+    elif task == TASK_RL:
+        records = [{"prompt": r["prompt"]} for r in rows]
     else:
         raise ValueError(f"Unknown task type: {task}")
 
