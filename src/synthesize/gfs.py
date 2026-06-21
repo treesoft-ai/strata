@@ -25,8 +25,26 @@ import time
 from typing import Callable
 
 from src.synthesize.config import GFSConfig
-from src.synthesize.openrouter import chat_completion
+import src.synthesize.openrouter as _openrouter
+import src.synthesize.agentrouter as _agentrouter
 from src.training.dataset import _detect_row_type
+
+
+def _chat_completion(*, model: str, system: str, user: str, temperature: float) -> str:
+    """Route to the correct provider based on model slug prefix."""
+    if model.startswith("agentrouter/"):
+        return _agentrouter.chat_completion(
+            model=model[len("agentrouter/"):],
+            system=system,
+            user=user,
+            temperature=temperature,
+        )
+    return _openrouter.chat_completion(
+        model=model,
+        system=system,
+        user=user,
+        temperature=temperature,
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -190,7 +208,7 @@ def synthesize_gfs(
                     user_msg = _build_user_message(
                         prompt, source_unit, config.task, batch_size
                     )
-                    text = chat_completion(
+                    text = _chat_completion(
                         model=config.model,
                         system=_GFS_SYSTEM_PROMPT,
                         user=user_msg,

@@ -13,6 +13,9 @@ DATASETS_DIR: Path = Path.home() / ".strata" / "datasets"
 # openrouter key file
 OPENROUTER_KEY_FILE: Path = Path.home() / ".strata" / "openrouter.json"
 
+# agentrouter key file
+AGENTROUTER_KEY_FILE: Path = Path.home() / ".strata" / "agentrouter.json"
+
 # hugging face token (optional, from environment)
 HF_TOKEN: Optional[str] = os.getenv("HF_TOKEN")
 

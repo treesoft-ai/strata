@@ -1062,35 +1062,54 @@ def main() -> None:
 
     elif command == "synthesize":
         from src.synthesize.config import SynthConfig, GFSConfig, load_any_config, list_configs, delete_config
-        from src.synthesize.openrouter import save_key, load_key, key_exists
+        import src.synthesize.openrouter as _or_provider
+        import src.synthesize.agentrouter as _ar_provider
         from src.synthesize.generator import synthesize
         from src.synthesize.gfs import synthesize_gfs
         from src.config import DATASETS_DIR
 
+        def _provider_for_key_cmd(provider_arg: str):
+            """Return the provider module for key subcommands."""
+            if provider_arg == "agentrouter":
+                return _ar_provider, "AgentRouter"
+            return _or_provider, "OpenRouter"
+
         sub_args = args[1:]
 
         # ---- key subcommand ------------------------------------------------
+        # key set [provider] {api_key}   (provider defaults to openrouter)
+        # key show [provider]
         if sub_args and sub_args[0].lower() == "key":
             print_header("Synthesize")
             if len(sub_args) < 2:
-                print_error("Synthesize", "Key subcommand missing.", "Use 'key set {api_key}' or 'key show'.")
+                print_error("Synthesize", "Key subcommand missing.", "Use 'key set [provider] {api_key}' or 'key show [provider]'.")
                 sys.exit(1)
             key_sub = sub_args[1].lower()
             if key_sub == "set":
-                if len(sub_args) < 3:
-                    print_error("Synthesize", "API key value is missing.", "Run 'uv run main.py synthesize key set {api_key}'.")
-                    sys.exit(1)
-                save_key(sub_args[2])
-                print("  OpenRouter API key saved.")
-            elif key_sub == "show":
-                if not key_exists():
-                    print("  No API key stored.")
+                # key set {api_key}  OR  key set {provider} {api_key}
+                _known_providers = {"openrouter", "agentrouter"}
+                if len(sub_args) >= 4 and sub_args[2].lower() in _known_providers:
+                    _prov_mod, _prov_name = _provider_for_key_cmd(sub_args[2].lower())
+                    _key_val = sub_args[3]
+                elif len(sub_args) >= 3 and sub_args[2].lower() not in _known_providers:
+                    _prov_mod, _prov_name = _provider_for_key_cmd("openrouter")
+                    _key_val = sub_args[2]
                 else:
-                    k = load_key()
+                    print_error("Synthesize", "API key value is missing.", "Run 'uv run main.py synthesize key set [provider] {api_key}'.")
+                    sys.exit(1)
+                _prov_mod.save_key(_key_val)
+                print(f"  {_prov_name} API key saved.")
+            elif key_sub == "show":
+                _prov_name_arg = sub_args[2].lower() if len(sub_args) >= 3 else "openrouter"
+                _prov_mod, _prov_name = _provider_for_key_cmd(_prov_name_arg)
+                if not _prov_mod.key_exists():
+                    print(f"  No {_prov_name} API key stored.")
+                else:
+                    k = _prov_mod.load_key()
                     masked = k[:8] + "..." + k[-4:] if len(k) > 12 else "****"
-                    print(f"  API key: {masked}")
+                    print(f"  {_prov_name} API key: {masked}")
             else:
-                print_error("Synthesize", f"Unknown key subcommand '{key_sub}'.", "Use 'key set {api_key}' or 'key show'.")
+                print_error("Synthesize", f"Unknown key subcommand '{key_sub}'.", "Use 'key set [provider] {api_key}' or 'key show [provider]'.")
                 sys.exit(1)
             sys.exit(0)
 
@@ -1173,8 +1192,11 @@ def main() -> None:
             print_error("Synthesize", str(err), "Edit the config file to fix the issue.")
             sys.exit(1)
 
-        if not key_exists():
-            print_error("Synthesize", "OpenRouter API key is not set.", "Run 'uv run main.py synthesize key set {api_key}'.")
+        _is_agentrouter = cfg.model.startswith("agentrouter/")
+        _active_provider = _ar_provider if _is_agentrouter else _or_provider
+        _active_provider_name = "AgentRouter" if _is_agentrouter else "OpenRouter"
+        if not _active_provider.key_exists():
+            print_error("Synthesize", f"{_active_provider_name} API key is not set.", f"Run 'uv run main.py synthesize key set {'agentrouter' if _is_agentrouter else 'openrouter'} {{api_key}}'.")
             sys.exit(1)
 
         # build output path
