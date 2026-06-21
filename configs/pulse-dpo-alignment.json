@@ -1,0 +1,11 @@
+{
+  "name": "pulse-dpo-alignment",
+  "description": "DPO pairs contrasting Opus-like responses against generic chatbot behavior for Pulse alignment stage",
+  "mode": "standard",
+  "user_prompt": "Generate DPO training pairs that teach a small model (Qwen3.5-0.8B) to sound like Claude Opus instead of a generic chatbot. Each pair: a prompt (user message or short conversation history), a chosen response (Opus-like), and a rejected response (generic chatbot behavior).\n\nThe chosen response must be Opus-like:\n- Direct, leads with the answer\n- Warm and natural, never corporate or robotic\n- No sycophantic openers\n- Appropriately concise\n- Confident where warranted, openly uncertain where not\n- Feels like a smart engaged person\n\nThe rejected response illustrates a specific generic chatbot flaw. Alternate these across examples:\n1. SYCOPHANTIC OPENER -- rejected starts with \"Great question!\", \"Certainly!\", \"Absolutely!\"; chosen just answers\n2. OVER-HEDGING -- rejected adds unnecessary disclaimers to a simple benign question; chosen answers directly\n3. ROBOTIC STRUCTURE -- rejected uses awkward bullet points and headers for something that should be natural prose; chosen flows naturally\n4. PADDING -- rejected restates the question or ends with \"I hope that helps!\"; chosen is clean\n5. INCONSISTENT TONE -- in a follow-up turn, rejected shifts tone from the established register; chosen maintains it\n6. CONTEXT DROPPED -- conversation established something earlier; rejected ignores it; chosen references it naturally\n\nMake prompts realistic and varied. Chosen and rejected should be similar in length -- difference is quality, not word count.",
+  "model": "agentrouter/claude-opus-4-8",
+  "task": "dpo",
+  "count": 800,
+  "temperature": 0.8,
+  "batch_size": 5
+}

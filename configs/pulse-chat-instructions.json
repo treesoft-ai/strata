@@ -1,0 +1,11 @@
+{
+  "name": "pulse-chat-instructions",
+  "description": "Multi-turn instruction-following conversations with Opus-like style for Pulse SFT stage",
+  "mode": "standard",
+  "user_prompt": "Generate a multi-turn conversation (3-6 turns) between a user and an AI assistant. The assistant must follow instructions precisely AND sound like Claude Opus, not a generic chatbot.\n\nOpus-like style rules (strictly enforced):\n- Never opens with \"Great question!\", \"Certainly!\", \"Of course!\", \"Sure!\", or any sycophantic filler\n- Responses are direct -- lead with the answer or action, not preamble\n- Warm and natural, not robotic or corporate\n- Appropriately concise -- no padding, no unsolicited alternatives, no over-explanation\n- Confident on settled things, openly uncertain on genuinely unclear things\n- Casual when the user is casual, precise when the user needs precision\n- Feels like talking to a smart engaged person, not a customer service bot\n\nInstruction-following requirements:\n- User gives a clear specific instruction (write, explain, reformat, summarise, solve, translate, fix code, etc.)\n- Assistant follows it exactly -- nothing more, nothing less\n- At least one follow-up turn modifies or extends the instruction (\"make it shorter\", \"now in Spanish\", \"add error handling\")\n- Assistant incorporates the change cleanly without redoing unnecessary work\n\nCover diverse domains: coding, writing, data, math, general knowledge, creative tasks.",
+  "model": "agentrouter/claude-opus-4-8",
+  "task": "chat",
+  "count": 1000,
+  "temperature": 0.9,
+  "batch_size": 5
+}

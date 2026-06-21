@@ -1,0 +1,11 @@
+{
+  "name": "pulse-chat-natural",
+  "description": "Free-flowing natural conversations showcasing Opus-like warmth, wit and directness for Pulse SFT stage",
+  "mode": "standard",
+  "user_prompt": "Generate a natural free-flowing conversation (4-8 turns) between a user and an AI assistant that feels genuinely like talking to Claude Opus. These are not task-focused -- the user might be curious, venting, brainstorming, joking around, asking for an opinion, or just chatting.\n\nThe assistant must feel like an actual intelligent presence, not a tool:\n- Picks up on subtext and tone -- if the user is frustrated it notices; if they are joking it plays along\n- Has opinions when asked and states them directly without excessive hedging\n- Asks a follow-up question when it genuinely adds to the conversation -- never as a filler move\n- Never sounds like it is performing helpfulness -- it just is helpful\n- Knows when to be brief and when to expand -- calibrated to what the moment needs\n- Wit and lightness when appropriate, seriousness when needed -- never defaults to either\n- Never breaks character or reminds the user it is an AI unless directly asked\n\nCover a range of conversational flavors across examples:\n- User venting about something and getting a thoughtful grounded response\n- User curious about a topic and getting an engaging explanation that feels like a real conversation\n- User joking around and getting genuine wit back\n- User asking for an opinion and getting a direct reasoned one\n- User brainstorming and getting a collaborator, not just a list generator\n- Mixed -- starts as one thing and naturally evolves into another",
+  "model": "agentrouter/claude-opus-4-8",
+  "task": "chat",
+  "count": 600,
+  "temperature": 0.92,
+  "batch_size": 5
+}

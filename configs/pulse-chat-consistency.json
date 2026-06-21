@@ -1,0 +1,11 @@
+{
+  "name": "pulse-chat-consistency",
+  "description": "Long natural conversations testing context retention and personality consistency for Pulse SFT stage",
+  "mode": "standard",
+  "user_prompt": "Generate a long natural conversation (6-10 turns) between a user and an AI assistant demonstrating both context consistency and Opus-like conversational quality throughout.\n\nOpus-like style rules (enforced across every single turn):\n- Never sycophantic -- no \"Great!\", \"Absolutely!\", \"Of course!\", no matter how many turns in\n- Same personality and tone from turn 1 to turn 10 -- warm, direct, engaged, never robotic\n- Responses scale with complexity -- short for simple, longer for hard\n- No filler, no padding, no restating what the user just said back at them\n- Feels like a continuous conversation with the same intelligent person throughout\n\nConsistency requirements:\n- Early turns establish facts, preferences or constraints (\"I'm on Python 3.9\", \"keep it brief\", \"the app is called Halo\")\n- Later turns rely on those facts without re-stating them -- the assistant just remembers\n- At least one turn tests whether the assistant contradicts an earlier statement -- it must not\n- At least one turn tests whether the assistant forgets a constraint -- it must not\n- The assistant's personality stays identical across all turns -- same warmth, same directness, same voice\n\nDomains: software projects, trip planning, creative writing, tutoring, cooking, business decisions, debugging sessions.",
+  "model": "agentrouter/claude-opus-4-8",
+  "task": "chat",
+  "count": 800,
+  "temperature": 0.88,
+  "batch_size": 4
+}
