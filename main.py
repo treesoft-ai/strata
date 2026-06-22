@@ -137,14 +137,19 @@ def print_run_help() -> None:
 
 def print_synthesize_help() -> None:
     print_header("Synthesize")
-    print("  Usage: uv run main.py synthesize {config_name}          Run synthesis using a config")
+    print("  Usage: uv run main.py synthesize {config} [config2 ...] [options]")
     print("         uv run main.py synthesize config list             List available configs")
     print("         uv run main.py synthesize config show {name}      Show config details")
     print("         uv run main.py synthesize config rm {name}        Delete a config")
     print("         uv run main.py synthesize key set {api_key}       Store OpenRouter API key")
     print("         uv run main.py synthesize key show                Show stored API key (masked)\n")
-    print("  Generates a synthetic Strata JSONL dataset using an OpenRouter AI model.")
-    print("  Output is saved to ~/.strata/datasets/{timestamp}_{id}.jsonl by default.\n")
+    print("  Generates synthetic Strata JSONL datasets using an AI model.")
+    print("  Multiple configs can be passed as separate args or comma-separated.")
+    print("  Output is saved to ~/.strata/datasets/{timestamp}_{id}.jsonl per config.\n")
+    print("  Options")
+    print("  --workers N        Concurrent API calls per config (default: 3)")
+    print("  --multi-parallel   Run all configs simultaneously in parallel")
+    print("  --resume path      Continue an existing .jsonl dataset (single config only)\n")
     print("  Standard config (~/.strata/configs/{name}.json)  mode: \"standard\"")
     print("  name          Config identifier")
     print("  description   Human-readable description")
@@ -1177,121 +1182,242 @@ def main() -> None:
             print_synthesize_help()
             sys.exit(1)
 
-        config_name = sub_args[0]
-        print_header("Synthesize")
-
-        try:
-            cfg = load_any_config(config_name)
-        except FileNotFoundError as err:
-            print_error("Synthesize", str(err), "Run 'uv run main.py synthesize config list' to see available configs.")
-            sys.exit(1)
-
-        try:
-            cfg.validate()
-        except ValueError as err:
-            print_error("Synthesize", str(err), "Edit the config file to fix the issue.")
-            sys.exit(1)
-
-        _is_agentrouter = cfg.model.startswith("agentrouter/")
-        _active_provider = _ar_provider if _is_agentrouter else _or_provider
-        _active_provider_name = "AgentRouter" if _is_agentrouter else "OpenRouter"
-        if not _active_provider.key_exists():
-            print_error("Synthesize", f"{_active_provider_name} API key is not set.", f"Run 'uv run main.py synthesize key set {'agentrouter' if _is_agentrouter else 'openrouter'} {{api_key}}'.")
-            sys.exit(1)
-
-        # build output path
         import random
         import string
-        _ts = time.strftime("%Y%m%d_%H%M%S")
-        _rid = "".join(random.choices(string.ascii_lowercase + string.digits, k=6))
-        output_path = DATASETS_DIR / f"{_ts}_{_rid}.jsonl"
 
-        _last_line_len = [0]
+        # Parse config names (positional, comma-separable) and flags
+        config_names: list[str] = []
+        synth_workers = 3
+        multi_parallel = False
+        resume_path: str | None = None
+        _si = 0
+        while _si < len(sub_args):
+            _sa = sub_args[_si]
+            if _sa == "--multi-parallel":
+                multi_parallel = True
+            elif _sa == "--workers":
+                _si += 1
+                if _si < len(sub_args):
+                    try:
+                        synth_workers = int(sub_args[_si])
+                        if synth_workers < 1:
+                            raise ValueError
+                    except ValueError:
+                        print_error("Synthesize", f"--workers expects a positive integer, got '{sub_args[_si]}'.", "Example: --workers 5")
+                        sys.exit(1)
+            elif _sa == "--resume":
+                _si += 1
+                if _si < len(sub_args):
+                    resume_path = sub_args[_si]
+                else:
+                    print_error("Synthesize", "--resume expects a path to an existing .jsonl file.", "Example: --resume ~/.strata/datasets/20260101_120000_abc123.jsonl")
+                    sys.exit(1)
+            else:
+                for _cn in _sa.split(","):
+                    _cn = _cn.strip()
+                    if _cn:
+                        config_names.append(_cn)
+            _si += 1
 
-        def _overwrite_line(text: str) -> None:
-            pad = max(0, _last_line_len[0] - len(text))
-            print(f"\r{text}{' ' * pad}", end="", flush=True)
-            _last_line_len[0] = len(text)
+        if resume_path is not None and len(config_names) != 1:
+            print_error("Synthesize", "--resume can only be used with a single config.", "Pass exactly one config name when resuming.")
+            sys.exit(1)
+        if resume_path is not None and multi_parallel:
+            print_error("Synthesize", "--resume is incompatible with --multi-parallel.", "Resume only supports a single config.")
+            sys.exit(1)
 
-        if isinstance(cfg, GFSConfig):
-            # ---- GFS mode --------------------------------------------------
-            print(f"  Config:   {cfg.name}  —  {cfg.description}")
-            print(f"  Mode:     gfs")
-            print(f"  Model:    {cfg.model}")
-            print(f"  Task:     {cfg.task}")
-            print(f"  Source:   {cfg.source}")
-            print(f"  Prompts:  {len(cfg.prompts)}")
-            print(f"  Count:    {cfg.count} per prompt per source unit")
-            print(f"  Output:   {output_path}\n")
+        if not config_names:
+            print_synthesize_help()
+            sys.exit(1)
 
-            def _gfs_progress(src_idx, total_src, prm_idx, total_prm, generated, skipped):
-                line = (
-                    f"  Source {src_idx}/{total_src}  "
-                    f"Prompt {prm_idx}/{total_prm}  "
-                    f"Generated {generated}"
-                )
-                if skipped:
-                    line += f"  [{skipped} skipped]"
-                _overwrite_line(line)
+        print_header("Synthesize")
 
+        # Resolve resume_from before building the run list
+        _resume_from = 0
+        _resume_output: Path | None = None
+        if resume_path is not None:
+            _resume_output = Path(resume_path).expanduser()
+            if not _resume_output.exists():
+                print_error("Synthesize", f"Resume file not found: {_resume_output}", "Check the path and try again.")
+                sys.exit(1)
+            # Count valid lines already written
             try:
-                result = synthesize_gfs(cfg, output_path, progress_callback=_gfs_progress)
-            except (FileNotFoundError, ValueError) as err:
-                print(f"\n\n  ! Error: {str(err)}\n")
-                print("  Check the 'source' path and glob pattern in your config.")
-                sys.exit(1)
-            except RuntimeError as err:
-                print(f"\n\n  ! Error: {str(err)}\n")
-                print("  Check your OpenRouter API key and model name.")
-                sys.exit(1)
+                _resume_from = sum(
+                    1 for _line in _resume_output.read_text(encoding="utf-8").splitlines()
+                    if _line.strip()
+                )
             except Exception as err:
-                print(f"\n\n  ! Error: {str(err)}\n")
+                print_error("Synthesize", f"Could not read resume file: {err}", "Check file permissions.")
                 sys.exit(1)
 
-            elapsed = result["elapsed_s"]
-            _overwrite_line("  Done.")
-            print()
-            print()
-            print(f"  Generated: {result['generated']} examples  ({elapsed:.1f}s)")
-            print(f"  Sources:   {result['sources']} source units processed")
-            if result["skipped"]:
-                print(f"  Skipped:   {result['skipped']} invalid lines from model output")
-            print(f"  Saved to:  {result['output']}")
+        # Validate all configs and API keys upfront before starting anything
+        _configs_to_run: list[tuple] = []
+        for _cn in config_names:
+            try:
+                _cfg = load_any_config(_cn)
+            except FileNotFoundError as err:
+                print_error("Synthesize", str(err), "Run 'uv run main.py synthesize config list' to see available configs.")
+                sys.exit(1)
+            try:
+                _cfg.validate()
+            except ValueError as err:
+                print_error("Synthesize", f"Config '{_cn}': {err}", "Edit the config file to fix the issue.")
+                sys.exit(1)
+            _is_ar = _cfg.model.startswith("agentrouter/")
+            _prov = _ar_provider if _is_ar else _or_provider
+            _prov_name = "AgentRouter" if _is_ar else "OpenRouter"
+            if not _prov.key_exists():
+                _key_cmd = "agentrouter" if _is_ar else "openrouter"
+                print_error("Synthesize", f"Config '{_cn}' requires {_prov_name} but no API key is set.", f"Run 'uv run main.py synthesize key set {_key_cmd} {{api_key}}'.")
+                sys.exit(1)
+            if _resume_output is not None:
+                _out = _resume_output
+            else:
+                _ts = time.strftime("%Y%m%d_%H%M%S")
+                _rid = "".join(random.choices(string.ascii_lowercase + string.digits, k=6))
+                _out = DATASETS_DIR / f"{_ts}_{_rid}.jsonl"
+            _configs_to_run.append((_cfg, _out))
+
+        import math
+
+        # In parallel mode a lock serialises all stdout writes so lines
+        # from different threads never interleave.
+        _print_lock = threading.Lock()
+
+        def _emit(text: str, lock: threading.Lock | None = None) -> None:
+            if lock:
+                with lock:
+                    print(text, flush=True)
+            else:
+                print(text, flush=True)
+
+        # Helper: run one config and stream per-batch logs to stdout.
+        # log_batches   — print a line for every batch that completes.
+        # lock          — if provided, all prints go through it (parallel mode).
+        # Raises on error — caller handles it.
+        def _run_one(cfg, output_path, log_batches: bool, lock: threading.Lock | None = None, resume_from: int = 0) -> dict:
+            import math as _math
+            _effective_target = max(0, cfg.count - resume_from)
+            total_batches = _math.ceil(_effective_target / cfg.batch_size) if _effective_target > 0 else 0
+            batch_num = [0]
+
+            if isinstance(cfg, GFSConfig):
+                if log_batches:
+                    _emit("\n".join([
+                        f"  Config:   {cfg.name}  —  {cfg.description}",
+                        f"  Mode:     gfs",
+                        f"  Model:    {cfg.model}",
+                        f"  Task:     {cfg.task}",
+                        f"  Source:   {cfg.source}",
+                        f"  Prompts:  {len(cfg.prompts)}",
+                        f"  Count:    {cfg.count} per prompt per source unit",
+                        f"  Workers:  {synth_workers}",
+                        f"  Output:   {output_path}",
+                        "",
+                    ]), lock)
+
+                def _gfs_cb(src_idx, total_src, prm_idx, total_prm, generated, skipped):
+                    batch_num[0] += 1
+                    line = (
+                        f"  {cfg.name}  batch {batch_num[0]}  "
+                        f"source {src_idx}/{total_src}  "
+                        f"prompt {prm_idx}/{total_prm}  "
+                        f"{generated} generated"
+                    )
+                    if skipped:
+                        line += f"  ({skipped} skipped)"
+                    if log_batches:
+                        _emit(line, lock)
+
+                result = synthesize_gfs(cfg, output_path, progress_callback=_gfs_cb)
+            else:
+                if log_batches:
+                    _resume_note = f"  Resuming: {resume_from} already generated\n" if resume_from > 0 else ""
+                    _emit("\n".join([
+                        f"  Config:   {cfg.name}  —  {cfg.description}",
+                        f"  Mode:     standard",
+                        f"  Model:    {cfg.model}",
+                        f"  Task:     {cfg.task}",
+                        f"  Target:   {cfg.count} examples",
+                        f"  Workers:  {synth_workers}",
+                        f"  Output:   {output_path}",
+                        "",
+                    ]) + _resume_note, lock)
+
+                def _std_cb(generated: int, target: int, skipped: int) -> None:
+                    batch_num[0] += 1
+                    line = f"  {cfg.name}  batch {batch_num[0]}/{total_batches}  {generated}/{target} generated"
+                    if skipped:
+                        line += f"  ({skipped} skipped)"
+                    if log_batches:
+                        _emit(line, lock)
+
+                result = synthesize(cfg, output_path, progress_callback=_std_cb, workers=synth_workers, resume_from=resume_from)
+
+            # Dataset completion log — always printed (sequential or parallel)
+            skipped_note = f"  ({result['skipped']} skipped)" if result["skipped"] else ""
+            if isinstance(cfg, GFSConfig):
+                src_note = f"  {result['sources']} sources"
+            else:
+                src_note = ""
+            _emit(f"\n  * {cfg.name}  {result['generated']} examples{src_note}  {result['elapsed_s']:.1f}s{skipped_note}", lock)
+            _emit(f"    Saved to {result['output']}", lock)
+
+            return result
+
+        if multi_parallel and len(_configs_to_run) > 1:
+            # ---- multi-parallel: all configs run simultaneously -------------
+            _emit(f"  Running {len(_configs_to_run)} configs in parallel  (workers per config: {synth_workers})\n")
+            for _cfg, _ in _configs_to_run:
+                _emit(f"  - {_cfg.name}")
+            _emit("")
+
+            _thread_results: list = [None] * len(_configs_to_run)
+            _thread_errors: list = [None] * len(_configs_to_run)
+
+            def _thread_target(idx: int, cfg, out) -> None:
+                try:
+                    _thread_results[idx] = _run_one(cfg, out, log_batches=True, lock=_print_lock)
+                except Exception as exc:
+                    _thread_errors[idx] = exc
+                    with _print_lock:
+                        print(f"\n  ! {cfg.name}: {exc}", flush=True)
+
+            _threads = [
+                threading.Thread(target=_thread_target, args=(i, cfg, out), daemon=False)
+                for i, (cfg, out) in enumerate(_configs_to_run)
+            ]
+            for _t in _threads:
+                _t.start()
+            for _t in _threads:
+                _t.join()
+
+            _emit("")
+            if any(e is not None for e in _thread_errors):
+                sys.exit(1)
 
         else:
-            # ---- standard mode ---------------------------------------------
-            print(f"  Config:   {cfg.name}  —  {cfg.description}")
-            print(f"  Mode:     standard")
-            print(f"  Model:    {cfg.model}")
-            print(f"  Task:     {cfg.task}")
-            print(f"  Target:   {cfg.count} examples")
-            print(f"  Output:   {output_path}\n")
+            # ---- sequential: one config at a time ---------------------------
+            for _idx, (_cfg, _out) in enumerate(_configs_to_run):
+                if len(_configs_to_run) > 1:
+                    _emit(f"  [{_idx + 1}/{len(_configs_to_run)}] {_cfg.name}\n")
 
-            def _synth_progress(generated: int, target: int, skipped: int) -> None:
-                pct = int(generated / target * 100)
-                line = f"  Generating... {generated}/{target}  ({pct}%)"
-                if skipped:
-                    line += f"  [{skipped} invalid lines skipped]"
-                _overwrite_line(line)
+                try:
+                    _run_one(_cfg, _out, log_batches=True, resume_from=_resume_from)
+                except (FileNotFoundError, ValueError) as err:
+                    _emit(f"\n  ! Error: {err}\n")
+                    _emit("  Check the 'source' path and glob pattern in your config.")
+                    sys.exit(1)
+                except RuntimeError as err:
+                    _emit(f"\n  ! Error: {err}\n")
+                    _emit("  Check your API key and model name.")
+                    sys.exit(1)
+                except Exception as err:
+                    _emit(f"\n  ! Error: {err}\n")
+                    sys.exit(1)
 
-            try:
-                result = synthesize(cfg, output_path, progress_callback=_synth_progress)
-            except RuntimeError as err:
-                print(f"\n\n  ! Error: {str(err)}\n")
-                print("  Check your OpenRouter API key and model name.")
-                sys.exit(1)
-            except Exception as err:
-                print(f"\n\n  ! Error: {str(err)}\n")
-                sys.exit(1)
-
-            elapsed = result["elapsed_s"]
-            _overwrite_line("  Done.")
-            print()
-            print()
-            print(f"  Generated: {result['generated']} examples  ({elapsed:.1f}s)")
-            if result["skipped"]:
-                print(f"  Skipped:   {result['skipped']} invalid lines from model output")
-            print(f"  Saved to:  {result['output']}")
+                if len(_configs_to_run) > 1 and _idx < len(_configs_to_run) - 1:
+                    _emit("")
 
         sys.exit(0)
 

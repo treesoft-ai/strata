@@ -196,6 +196,7 @@ def synthesize_gfs(
     generated = 0
     total_skipped = 0
     t0 = time.time()
+    system_prompt = _build_gfs_system_prompt(getattr(config, "taip_ignore", []))
 
     with output_path.open("w", encoding="utf-8") as out_fh:
         for src_idx, source_unit in enumerate(source_units):
@@ -210,7 +211,7 @@ def synthesize_gfs(
                     )
                     text = _chat_completion(
                         model=config.model,
-                        system=_GFS_SYSTEM_PROMPT,
+                        system=system_prompt,
                         user=user_msg,
                         temperature=config.temperature,
                     )
@@ -248,11 +249,9 @@ def synthesize_gfs(
 
 # Imported lazily to avoid circular imports at module level — defined here
 # so it lives next to the generation logic.
-from src.synthesize.generator import _SYSTEM_PROMPT as _BASE_SYSTEM_PROMPT
+from src.synthesize.generator import _build_system_prompt
 
-_GFS_SYSTEM_PROMPT = (
-    _BASE_SYSTEM_PROMPT
-    + """
+_GFS_SUFFIX = """
 
 ────────────────────────────────────────────────────────
 GFS — Grounding-From-Source mode
@@ -268,4 +267,7 @@ that source material:
 explain what the code does, or test understanding of it — never output \
 fabricated function signatures or APIs that don't exist in the source.\
 """
-)
+
+
+def _build_gfs_system_prompt(taip_ignore: list) -> str:
+    return _build_system_prompt(taip_ignore) + _GFS_SUFFIX

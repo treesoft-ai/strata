@@ -36,6 +36,7 @@ class SynthConfig:
     temperature: float
     batch_size: int
     mode: str = "standard"
+    taip_ignore: list = field(default_factory=list)
 
     @classmethod
     def load(cls, name: str) -> "SynthConfig":
@@ -48,6 +49,7 @@ class SynthConfig:
         with path.open("r", encoding="utf-8") as fh:
             data = json.load(fh)
         data.setdefault("mode", "standard")
+        data.setdefault("taip_ignore", [])
         return cls(**data)
 
     def save(self) -> None:
@@ -101,6 +103,7 @@ class GFSConfig:
     mode: str = "gfs"
     glob: str = ""
     max_source_chars: int = 8000
+    taip_ignore: list = field(default_factory=list)
 
     @classmethod
     def load(cls, name: str) -> "GFSConfig":
@@ -115,6 +118,7 @@ class GFSConfig:
         data.setdefault("mode", "gfs")
         data.setdefault("glob", "")
         data.setdefault("max_source_chars", 8000)
+        data.setdefault("taip_ignore", [])
         return cls(**data)
 
     def save(self) -> None:

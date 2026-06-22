@@ -12,6 +12,8 @@ AgentRouter requires client-identification headers matching a recognised client
 from __future__ import annotations
 
 import json
+import random
+import time
 import urllib.request
 import urllib.error
 from pathlib import Path
@@ -63,6 +65,11 @@ def key_exists() -> bool:
 # chat completion                                                              #
 # --------------------------------------------------------------------------- #
 
+_TIMEOUT = 240          # seconds per request
+_RETRY_DELAY = 5        # seconds for first retry, capped at _RETRY_MAX_DELAY
+_RETRY_MAX_DELAY = 20   # maximum seconds between retries
+
+
 def chat_completion(
     *,
     model: str,
@@ -72,7 +79,8 @@ def chat_completion(
 ) -> str:
     """
     Call AgentRouter chat completions and return the assistant message content.
-    Raises RuntimeError on API errors.
+    Retries up to _MAX_RETRIES times on transient network/timeout errors.
+    Raises RuntimeError on API errors or exhausted retries.
     """
     api_key = load_key()
 
@@ -82,45 +90,60 @@ def chat_completion(
             {"role": "system", "content": system},
             {"role": "user", "content": user},
         ],
-        "temperature": temperature,
     }).encode("utf-8")
 
-    req = urllib.request.Request(
-        _CHAT_URL,
-        data=payload,
-        method="POST",
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}",
-            "User-Agent": _USER_AGENT,
-            "Originator": _ORIGINATOR,
-            "Version": _VERSION,
-        },
-    )
+    last_error: Exception | None = None
+    attempt = 0
 
-    try:
-        with urllib.request.urlopen(req, timeout=120) as resp:
-            raw = resp.read().decode("utf-8")
-    except urllib.error.HTTPError as exc:
-        raw = exc.read().decode("utf-8", errors="replace")
+    while True:
+        attempt += 1
+        req = urllib.request.Request(
+            _CHAT_URL,
+            data=payload,
+            method="POST",
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key}",
+                "User-Agent": _USER_AGENT,
+                "Originator": _ORIGINATOR,
+                "Version": _VERSION,
+            },
+        )
+
         try:
-            err = json.loads(raw)
-            msg = err.get("error", {}).get("message", raw)
-        except Exception:
-            msg = raw
-        raise RuntimeError(f"AgentRouter API error {exc.code}: {msg}") from exc
-    except urllib.error.URLError as exc:
-        raise RuntimeError(f"Network error calling AgentRouter: {exc.reason}") from exc
+            with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
+                raw = resp.read().decode("utf-8")
+        except urllib.error.HTTPError as exc:
+            raw = exc.read().decode("utf-8", errors="replace")
+            try:
+                err = json.loads(raw)
+                msg = err.get("error", {}).get("message", raw)
+            except Exception:
+                msg = raw
+            # 429 rate limit is transient — retry forever with backoff + jitter
+            if exc.code == 429:
+                base = min(_RETRY_DELAY * attempt, _RETRY_MAX_DELAY)
+                time.sleep(base + random.uniform(0, base * 0.5))
+                continue
+            # all other HTTP errors are not retryable
+            raise RuntimeError(f"AgentRouter API error {exc.code}: {msg}") from exc
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            base = min(_RETRY_DELAY * attempt, _RETRY_MAX_DELAY)
+            time.sleep(base + random.uniform(0, base * 0.5))
+            continue
 
-    if not raw.strip():
-        raise RuntimeError("AgentRouter returned an empty response body.")
+        if not raw.strip():
+            base = min(_RETRY_DELAY * attempt, _RETRY_MAX_DELAY)
+            time.sleep(base + random.uniform(0, base * 0.5))
+            continue
 
-    try:
-        body = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(f"AgentRouter returned non-JSON response: {raw[:200]}") from exc
+        try:
+            body = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"AgentRouter returned non-JSON response: {raw[:200]}") from exc
 
-    try:
-        return body["choices"][0]["message"]["content"]
-    except (KeyError, IndexError) as exc:
-        raise RuntimeError(f"Unexpected AgentRouter response shape: {body}") from exc
+        try:
+            return body["choices"][0]["message"]["content"]
+        except (KeyError, IndexError) as exc:
+            raise RuntimeError(f"Unexpected AgentRouter response shape: {body}") from exc
+
