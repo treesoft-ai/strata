@@ -100,7 +100,7 @@ def chat_completion(
 
     try:
         with urllib.request.urlopen(req, timeout=120) as resp:
-            body = json.loads(resp.read().decode("utf-8"))
+            raw = resp.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
         raw = exc.read().decode("utf-8", errors="replace")
         try:
@@ -111,6 +111,14 @@ def chat_completion(
         raise RuntimeError(f"AgentRouter API error {exc.code}: {msg}") from exc
     except urllib.error.URLError as exc:
         raise RuntimeError(f"Network error calling AgentRouter: {exc.reason}") from exc
+
+    if not raw.strip():
+        raise RuntimeError("AgentRouter returned an empty response body.")
+
+    try:
+        body = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"AgentRouter returned non-JSON response: {raw[:200]}") from exc
 
     try:
         return body["choices"][0]["message"]["content"]
