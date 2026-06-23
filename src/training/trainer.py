@@ -335,8 +335,8 @@ def _train_sft(
             seed=cfg.seed,
             report_to="none",
             disable_tqdm=True,
-            max_seq_length=cfg.max_seq_length,
         ),
+        max_seq_length=cfg.max_seq_length,
         formatting_func=formatting_func,
         callbacks=[callback] if callback else [],
     )
