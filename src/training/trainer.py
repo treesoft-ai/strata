@@ -288,7 +288,8 @@ def _train_sft(
     progress_callback,
     resume_from: Optional[str],
 ) -> str:
-    from trl import SFTTrainer, SFTConfig
+    from trl import SFTTrainer
+    from transformers import TrainingArguments
 
     model, tokenizer = _load_base_model_and_tokenizer(cfg)
 
@@ -319,7 +320,7 @@ def _train_sft(
     trainer = SFTTrainer(
         model=model,
         train_dataset=hf_ds,
-        args=SFTConfig(
+        args=TrainingArguments(
             output_dir=str(Path(cfg.output_dir) / "checkpoints"),
             num_train_epochs=cfg.epochs,
             per_device_train_batch_size=cfg.batch_size,
